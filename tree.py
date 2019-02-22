@@ -31,12 +31,12 @@ class MemConsNode(object):
         super(MemConsNode, self).__init__()
         #first entry into tree
         self.mpoles = np.zeros(p, dtype=np.complex128)
-        self.lexpansion = np.zeros(p, dtype=np.complex128)
+        self.lexp = np.zeros(p, dtype=np.complex128)
         tree_dict[l][num] = self
 
     @staticmethod
     def get_parent_num(num, d):
-        return int(num/(2**d))
+        return num >> d
 
     @staticmethod
     def get_children_nums(num, d):
@@ -47,11 +47,8 @@ class MemConsNode(object):
 
     @staticmethod
     def _get_nums(num, d):
-        bin_rep = bin(num)
-        bin_rep = bin_rep[2:]
-        ns = []
-        for i in range(d):
-            ns.append('')
+        bin_rep = np.binary_repr(num)
+        ns = ['']*d
         k = 0
         while len(bin_rep) > 0:
             ns[k] = bin_rep[-1] + ns[k]
@@ -81,7 +78,7 @@ class MemConsNode(object):
         ns2 = deepcopy(ns)
         for i in range(len(ns)):
             ns[i] = []
-            if ns2[i] >= c and ns2[i] < (2**(l*d) - c):
+            if ns2[i] >= c and ns2[i] < (2**(l*d)-1 - c):
                 for j in range(-1*c, c+1, 1):
                     ns[i].append(ns2[i]+j)
             elif ns2[i] < c:
@@ -93,33 +90,60 @@ class MemConsNode(object):
                     ns[i].append(ns2[i] + j)
         neighs = []
         for pn in list(product(*ns)):
-            if pn != ns2:
-                out = ''
-                for n in pn:
-                    out += str(n)
-                neighs.append(pn)
+            nl = []
+            neigh_num = ''
+            for i in range(d):
+                nl.append(np.binary_repr(pn[i], l+1))
+            #interleave
+            for j in range(l+1):
+                for i in range(d):
+                    neigh_num = neigh_num + nl[i][0]
+                    nl[i] = nl[i][1:]
+            a = int(neigh_num, 2)
+            if a != num:
+                neighs.append(a)
         return neighs
 
     @staticmethod
-    def get_ilist(l, num, d):
+    def get_ilist(l, num, d, c=1):
+        #get parent neighbors
+        pn = MemConsNode.get_parent_num(num, d)
+        pn = MemConsNode.get_neighbor_list(l-1, pn, d, c=c)
+        #get parent neighbors children
+        pnc = []
+        for p in pn:
+            ch = MemConsNode.get_children_nums(p, d)
+            while(len(ch)>0):
+                pnc.append(ch.pop())
+        #get complement of pnc with respect to node neighbors
+        nn = MemConsNode.get_neighbor_list(l, num, d, c=c)
+        ilist = []
+        for ch in pnc:
+            if ch not in nn:
+                ilist.append(ch)
+        return ilist
 
 
 
 class MemLibNode(MemConsNode):
 
-    def __init__(self, tree_dict, p, d, l=0, num=0):
+    def __init__(self, tree_dict, p, d, max_depth, l=0, num=0):
         super(MemLibNode, self).__init__(tree_dict, p, l=l, num=num)
         if l != 0:
             self.parent = self.get_parent_num(num, d)
             self.neighs = self.get_neighbor_list(l, num, d)
-        self.children = self.get_children_nums(num, d)
+            self.ilist = MemConsNode.get_ilist(l, num, d, c=1)
+        if l < max_depth-1:
+            self.children = self.get_children_nums(num, d)
+        else:
+            self.children = None
         self.center = self.get_center(l, num, d)
 
 
-class ConsFmm2dNode(MemConsNode):
+class Cons2dNode(MemConsNode):
 
     def __init__(self, tree_dict, parray, max_depth, mnum, l=0, num=0):
-        super(ConsFmm2dNode, self).__init__(tree_dict, mnum, l=l, num=num)
+        super(Cons2dNode, self).__init__(tree_dict, mnum, l=l, num=num)
         if l < max_depth - 1:
             self.parray = None
             self.refine(tree_dict, parray, max_depth, mnum, l, num)
@@ -131,14 +155,15 @@ class ConsFmm2dNode(MemConsNode):
         nums = self.get_children_nums(num, 2)
         for i in range(len(nums)):
             if child_part[i].shape[0] > 0:
-                ConsFmm2dNode(tree_dict, child_part[i], max_depth, mnum, 
+                Cons2dNode(tree_dict, child_part[i], max_depth, mnum, 
                 num=nums[i], l=l+1)
 
 
-class LibFmm2dNode(MemLibNode):
+class Lib2dNode(MemLibNode):
 
     def __init__(self, tree_dict, parray, max_depth, mnum, l=0, num=0):
-        super(LibFmm2dNode, self).__init__(tree_dict, mnum, 2, l=l, num=num)
+        super(Lib2dNode, self).__init__(tree_dict, mnum, 2, 
+                                        max_depth, l=l, num=num)
         if l < max_depth - 1:
             self.parray = None
             self.refine(tree_dict, parray, max_depth, mnum, num, l)
@@ -149,5 +174,5 @@ class LibFmm2dNode(MemLibNode):
         child_part = quad_partition(parray, self.center)
         for i in range(len(self.children)):
             if child_part[i].shape[0] > 0:
-                LibFmm2dNode(tree_dict, child_part[i], max_depth, mnum, 
+                Lib2dNode(tree_dict, child_part[i], max_depth, mnum, 
                 l=l+1, num=self.children[i])
